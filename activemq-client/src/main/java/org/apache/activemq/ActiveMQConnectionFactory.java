@@ -313,6 +313,8 @@ public class ActiveMQConnectionFactory extends JNDIBaseStorable implements Conne
      */
     protected Transport createTransport() throws JMSException {
         try {
+
+            // 即 tcp://192.168.89.210:61616
             URI connectBrokerUL = brokerURL;
             String scheme = brokerURL.getScheme();
             if (scheme == null) {
@@ -327,7 +329,7 @@ public class ActiveMQConnectionFactory extends JNDIBaseStorable implements Conne
             } else if (scheme.equals("auto+nio+ssl")) {
                 connectBrokerUL = new URI(brokerURL.toString().replace("auto+nio+ssl", "nio+ssl"));
             }
-
+            // 根据 scheme 动态构建一个 Transport
             return TransportFactory.connect(connectBrokerUL);
         } catch (Exception e) {
             throw JMSExceptionSupport.create("Could not create Transport. Reason: " + e, e);
@@ -343,6 +345,8 @@ public class ActiveMQConnectionFactory extends JNDIBaseStorable implements Conne
         }
         ActiveMQConnection connection = null;
         try {
+
+            // 创建 transport，用于与 server 端进行交互
             Transport transport = createTransport();
             connection = createActiveMQConnection(transport, factoryStats);
 

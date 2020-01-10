@@ -61,6 +61,7 @@ public abstract class TransportFactory {
      * @throws Exception
      */
     public static Transport connect(URI location) throws Exception {
+        // 根据协议动态查找实现类
         TransportFactory tf = findTransportFactory(location);
         return tf.doConnect(location);
     }
@@ -117,7 +118,9 @@ public abstract class TransportFactory {
                 options.put("wireFormat.host", location.getHost());
             }
             WireFormat wf = createWireFormat(options);
+            //  创建一个Transport，就是创建一个 socket连接
             Transport transport = createTransport(location, wf);
+            // 配置 configure，这个里面是对 Transport 做链路包装
             Transport rc = configure(transport, wf, options);
             //remove auto
             IntrospectionSupport.extractProperties(options, "auto.");
@@ -179,7 +182,10 @@ public abstract class TransportFactory {
         if (tf == null) {
             // Try to load if from a META-INF property.
             try {
+                // 这里是 spi 扩展，和 dubbo 类似
+                // 从 META-INF/services/org/apache/activemq/transport/tcp 文件中找到实现类【TcpTransportFactory】
                 tf = (TransportFactory)TRANSPORT_FACTORY_FINDER.newInstance(scheme);
+                // 放置到缓存中
                 TRANSPORT_FACTORYS.put(scheme, tf);
             } catch (Throwable e) {
                 throw IOExceptionSupport.create("Transport scheme NOT recognized: [" + scheme + "]", e);
@@ -225,9 +231,14 @@ public abstract class TransportFactory {
      */
     @SuppressWarnings("rawtypes")
     public Transport configure(Transport transport, WireFormat wf, Map options) throws Exception {
+        // 组装一个复合的transport，这里会包装两层，一个是 IactivityMonitor.另一个是 WireFormatNegotiator
+        // WireFormatNegotiator 实现了客户端连接 broker 的时候先发送数据解析相关的协议信息，比如解析版本号，是否使用缓存等
+        // InactivityMonitor 用于实现连接成功成功后的心跳检查机制，客户端每 10s 发送一次心跳信息。服务端每 30s 读取一次心跳信息
         transport = compositeConfigure(transport, wf, options);
 
+        // 再做一层包装 MutexTransport，实现写锁，表示同一时间只允许发送一个请求
         transport = new MutexTransport(transport);
+        // 包装 ResponseCorrelator，用于实现异步请求
         transport = new ResponseCorrelator(transport);
 
         return transport;

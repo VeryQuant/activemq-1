@@ -83,7 +83,9 @@ public class ResponseCorrelator extends TransportFilter {
     }
 
     public Object request(Object command) throws IOException {
+        // 这里还是调用异步发送方法
         FutureResponse response = asyncRequest(command, null);
+        // 同步获取结果
         return response.getResult();
     }
 

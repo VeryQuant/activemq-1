@@ -1332,6 +1332,8 @@ public class ActiveMQConnection implements Connection, TopicConnection, QueueCon
                         Response response;
                         Throwable exception = null;
                         try {
+
+                            // 同步逻辑：这里会调用 getResult 阻塞获取返回值
                             response = resp.getResult();
                             if (response.isException()) {
                                 ExceptionResponse er = (ExceptionResponse)response;

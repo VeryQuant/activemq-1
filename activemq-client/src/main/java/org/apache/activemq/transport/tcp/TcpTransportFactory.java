@@ -140,6 +140,7 @@ public class TcpTransportFactory extends TransportFactory {
             }
         }
         SocketFactory socketFactory = createSocketFactory();
+        // tcpTransport 里持有 socketFactory 对象，socketFactory 会创建一个 socket，所以 tcpTransport 就是操作 socket
         return createTcpTransport(wf, socketFactory, location, localLocation);
     }
 

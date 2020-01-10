@@ -1910,14 +1910,21 @@ public class ActiveMQSession implements Session, QueueSession, TopicSession, Sta
         if (destination.isTemporary() && connection.isDeleted(destination)) {
             throw new InvalidDestinationException("Cannot publish to a deleted Destination: " + destination);
         }
+        // 互斥锁，如果一个 session 的多个 producer 发送消息到这里，会保证消息发送的有序性
         synchronized (sendMutex) {
             // tell the Broker we are about to start a new transaction
+            // 告诉broker开始一个新事务，只有事务型会话中才会开启
             doStartTransaction();
+
+            // 从事务上下文中获取事务 id
             TransactionId txid = transactionContext.getTransactionId();
             long sequenceNumber = producer.getMessageSequence();
 
             //Set the "JMS" header fields on the original message, see 1.1 spec section 3.4.11
+            // 在 JMS 协议头中设置是否持久化标识
             message.setJMSDeliveryMode(deliveryMode);
+
+            // 计算消息过期时间
             long expiration = 0L;
             if (!producer.getDisableMessageTimestamp()) {
                 long timeStamp = System.currentTimeMillis();
@@ -1926,17 +1933,30 @@ public class ActiveMQSession implements Session, QueueSession, TopicSession, Sta
                     expiration = timeToLive + timeStamp;
                 }
             }
+
+            // 设置消息过期时间
             message.setJMSExpiration(expiration);
+
+            // 设置消息的优先级
             message.setJMSPriority(priority);
+
+            // 设置消息为非重发
             message.setJMSRedelivered(false);
 
             // transform to our own message format here
+            // 将不同的消息格式统一转化为ActiveMQMessage
             ActiveMQMessage msg = ActiveMQMessageTransformation.transformMessage(message, connection);
+
+            // 设置目的地
             msg.setDestination(destination);
+
+            // 生成并设置消息 id
             msg.setMessageId(new MessageId(producer.getProducerInfo().getProducerId(), sequenceNumber));
 
             // Set the message id.
             if (msg != message) {
+
+                // 如果消息是经过转化的，则更新原来的消息 id 和目的地
                 message.setJMSMessageID(msg.getMessageId().toString());
                 // Make sure the JMS destination is set on the foreign messages too.
                 message.setJMSDestination(destination);
@@ -1949,12 +1969,19 @@ public class ActiveMQSession implements Session, QueueSession, TopicSession, Sta
                 msg = (ActiveMQMessage)msg.copy();
             }
             msg.setConnection(connection);
+
+            // 把消息属性和消息体都设置为只读，防止被修改
             msg.onSend();
             msg.setProducerId(msg.getMessageId().getProducerId());
             if (LOG.isTraceEnabled()) {
                 LOG.trace(getSessionId() + " sending message: " + msg);
             }
+
+            // 如果onComplete没有设置，且发送超时时间小于0，且消息不需要反馈，且连接器不是同步发送模式，且消息非持久化或者连接器是异步发送模式
+            // 或者存在事务 id 的情况下，走异步发送，否则走同步发送
             if (onComplete==null && sendTimeout <= 0 && !msg.isResponseRequired() && !connection.isAlwaysSyncSend() && (!msg.isPersistent() || connection.isUseAsyncSend() || txid != null)) {
+
+                // 异步发送
                 this.connection.asyncSendPacket(msg);
                 if (producerWindow != null) {
                     // Since we defer lots of the marshaling till we hit the
@@ -1964,13 +1991,16 @@ public class ActiveMQSession implements Session, QueueSession, TopicSession, Sta
                     // to get more accurate sizes.. this is more important once
                     // users start using producer window
                     // flow control.
+                    // 异步发送的情况下，需要设置 producerWindow 的大小
                     int size = msg.getSize();
                     producerWindow.increaseUsage(size);
                 }
             } else {
                 if (sendTimeout > 0 && onComplete==null) {
+                    // 带超时时间的同步发送
                     this.connection.syncSendPacket(msg,sendTimeout);
                 }else {
+                    // 带回调的同步发送
                     this.connection.syncSendPacket(msg, onComplete);
                 }
             }

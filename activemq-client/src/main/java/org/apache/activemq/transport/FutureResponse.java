@@ -45,6 +45,7 @@ public class FutureResponse {
     public Response getResult() throws IOException {
         boolean hasInterruptPending = Thread.interrupted();
         try {
+            // responseSlot 是 ArrayBlockingQueue 结构，这里调用 take 方法会阻塞获取结果
             return responseSlot.take();
         } catch (InterruptedException e) {
             hasInterruptPending = false;
