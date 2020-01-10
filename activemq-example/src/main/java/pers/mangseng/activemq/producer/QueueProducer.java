@@ -23,7 +23,7 @@ public class QueueProducer {
         //启动 JMS connection
         connection.start();
         //通过 connection 创建 JMS session，第一个参数表示使用事务
-        Session session = connection.createSession(Boolean.FALSE, Session.AUTO_ACKNOWLEDGE);
+        Session session = connection.createSession(Boolean.TRUE, Session.AUTO_ACKNOWLEDGE);
         //创建 JMS destination
         Destination destination = session.createQueue("my-queue");
         //创建 JMS producer，并设置 destination
@@ -37,7 +37,7 @@ public class QueueProducer {
             //发送 JMS message
             producer.send(message);
             //提交事务，对于 provider 来说，即消息被发送到 activeMQ 上
-            //session.commit();
+            session.commit();
         }
         //关闭所有的 JMS 资源（connection，session，producer等）
         producer.close();

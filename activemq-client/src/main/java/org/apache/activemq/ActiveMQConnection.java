@@ -1389,6 +1389,7 @@ public class ActiveMQConnection implements Connection, TopicConnection, QueueCon
         } else {
 
             try {
+                // 调用 transport 的 request 方法
                 Response response = (Response)(timeout > 0
                         ? this.transport.request(command, timeout)
                         : this.transport.request(command));
