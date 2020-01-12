@@ -477,12 +477,18 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
      * @return null if we timeout or if the consumer is closed.
      */
     private MessageDispatch dequeue(long timeout) throws JMSException {
+        // 从 unconsumedMessages 中取出一个消息，在创建一个消费者时，就会为这个消费者创建一个未消费的消息通道，
+        // 这个通道分为两种，一种是简单优先级队列分发通道 SimplePriorityMessageDispatchChannel；另一种是先进先出的分发通道 FifoMessageDispatchChannel（默认）
+        // 至于为什么要存在这样一个消息分发通道，大家可以想象一下，如果消费者每次去消费完一个消息以后再去 broker 拿一个消息，效率是比较低的。
+        // 所以通过这样的设计可以允许 session 能够一次性将多条消息分发给一个消费者。
+        // 默认情况下，对于 queue 来说，prefetchSize 的值是 1000，topic 是 100
         try {
             long deadline = 0;
             if (timeout > 0) {
                 deadline = System.currentTimeMillis() + timeout;
             }
             while (true) {
+                // 这里如果没有消息，会阻塞等待消息
                 MessageDispatch md = unconsumedMessages.dequeue(timeout);
                 if (md == null) {
                     if (timeout > 0 && !unconsumedMessages.isClosed()) {
@@ -566,15 +572,22 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
         checkClosed();
         checkMessageListener();
 
+        // 如果 PrefetchSizeSize 为 0 并且 unconsumedMessages 为空，则发起 pull 命令
         sendPullCommand(0);
+
+        // 从 unconsumedMessages 队列获取消息
         MessageDispatch md = dequeue(-1);
         if (md == null) {
             return null;
         }
 
+        // 主要是做消息消费之前的一些准备工作
         beforeMessageIsConsumed(md);
+
+        // 发送 ack 给到 broker
         afterMessageIsConsumed(md, false);
 
+        // 获取消息并返回
         return createActiveMQMessage(md);
     }
 
@@ -885,7 +898,9 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
      * broker to pull a message we are about to receive
      */
     protected void sendPullCommand(long timeout) throws JMSException {
+        // 用来清理已经分发的消息链表 deliveredMessages
         clearDeliveredList();
+        // 如果 prefetchSize 是 0，且 unconsumedMessages 也是空的，consumer 就变成了 pull 模式
         if (info.getCurrentPrefetchSize() == 0 && unconsumedMessages.isEmpty()) {
             MessagePull messagePull = new MessagePull();
             messagePull.configure(info);
@@ -913,14 +928,22 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
     private void beforeMessageIsConsumed(MessageDispatch md) throws JMSException {
         md.setDeliverySequenceId(session.getNextDeliveryId());
         lastDeliveredSequenceId = md.getMessage().getMessageId().getBrokerSequenceId();
+        // 如果 ACK 类型不是 DUPS_OK_ACKNOWLEDGE 且不是 Topic 这两种情况
         if (!isAutoAcknowledgeBatch()) {
             synchronized(deliveredMessages) {
+                // 放到 deliveredMessages，表示未确认 ACK 的消息列表
                 deliveredMessages.addFirst(md);
             }
+
+            // 如果是事务类型的会话
             if (session.getTransacted()) {
+                // 则判断 transactedIndividualAck，如果为 true
                 if (transactedIndividualAck) {
+                    // 单条消息直接返回 ack
                     immediateIndividualTransactedAck(md);
                 } else {
+                    // 否则，调用 ackLater，批量应答, client 端在消费消息后暂且不发送 ACK，而是把它缓存下来(pendingAck)
+                    // 等到这些消息的条数达到一定阀值时，只需要通过一个 ACK 指令把它们全部确认；这比对每条消息都逐个确认，在性能上要提高很多
                     ackLater(md, MessageAck.DELIVERED_ACK_TYPE);
                 }
             }
@@ -940,22 +963,28 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
         if (unconsumedMessages.isClosed()) {
             return;
         }
+        // 如果消息过期，则返回消息过期的 ack
         if (messageExpired) {
             acknowledge(md, MessageAck.EXPIRED_ACK_TYPE);
             stats.getExpiredMessageCount().increment();
         } else {
             stats.onMessage();
+            // 如果是事务类型的会话，则不做任何处理，因为前面已经处理过
             if (session.getTransacted()) {
                 // Do nothing.
-            } else if (isAutoAcknowledgeEach()) {
+            }
+            // 如果是 AUTO_ACKNOWLEDGE 或者 DUPS_OK_ACKNOWLEDGE（且为队列）
+            else if (isAutoAcknowledgeEach()) {
                 if (deliveryingAcknowledgements.compareAndSet(false, true)) {
                     synchronized (deliveredMessages) {
                         if (!deliveredMessages.isEmpty()) {
+                            // 是优化 ack 操作，则走批量确认
                             if (optimizeAcknowledge) {
                                 ackCounter++;
 
                                 // AMQ-3956 evaluate both expired and normal msgs as
                                 // otherwise consumer may get stalled
+                                // 当批处理数量 > 065 * prefetchSize 或者超过了 optimizeAcknowledgeTimeOut 的超时时间，就发送确认命令
                                 if (ackCounter + deliveredCounter >= (info.getPrefetchSize() * .65) || (optimizeAcknowledgeTimeOut > 0 && System.currentTimeMillis() >= (optimizeAckTimestamp + optimizeAcknowledgeTimeOut))) {
                                     MessageAck ack = makeAckForAllDeliveredMessages(MessageAck.STANDARD_ACK_TYPE);
                                     if (ack != null) {
@@ -977,6 +1006,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                                     }
                                 }
                             } else {
+                                // 不走优化，则是标准确认
                                 MessageAck ack = makeAckForAllDeliveredMessages(MessageAck.STANDARD_ACK_TYPE);
                                 if (ack!=null) {
                                     deliveredMessages.clear();
@@ -987,9 +1017,13 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                     }
                     deliveryingAcknowledgements.set(false);
                 }
-            } else if (isAutoAcknowledgeBatch()) {
+            }
+            // 如果是 DUPS_OK_ACKNOWLEDGE，则走 ackLater 逻辑
+            else if (isAutoAcknowledgeBatch()) {
                 ackLater(md, MessageAck.STANDARD_ACK_TYPE);
-            } else if (session.isClientAcknowledge()||session.isIndividualAcknowledge()) {
+            }
+            // 如果是 CLIENT_ACKNOWLEDGE，则执行 ackLater
+            else if (session.isClientAcknowledge()||session.isIndividualAcknowledge()) {
                 boolean messageUnackedByConsumer = false;
                 synchronized (deliveredMessages) {
                     messageUnackedByConsumer = deliveredMessages.contains(md);
@@ -1038,6 +1072,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
             MessageAck oldPendingAck = pendingAck;
             pendingAck = new MessageAck(md, ackType, deliveredCounter);
             pendingAck.setTransactionId(session.getTransactionContext().getTransactionId());
+            // 放到 pendingAck 中
             if( oldPendingAck==null ) {
                 pendingAck.setFirstMessageId(pendingAck.getLastMessageId());
             } else if ( oldPendingAck.getAckType() == pendingAck.getAckType() ) {
@@ -1054,6 +1089,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
             }
             // AMQ-3956 evaluate both expired and normal msgs as
             // otherwise consumer may get stalled
+            // 如果到达一定阈值，则发送 ack，即批量确认逻辑
             if ((0.5 * info.getPrefetchSize()) <= (deliveredCounter + ackCounter - additionalWindowSize)) {
                 LOG.debug("ackLater: sending: {}", pendingAck);
                 session.sendAck(pendingAck);
@@ -1425,6 +1461,8 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                                 // End of browse or pull request timeout.
                                 unconsumedMessages.enqueue(md);
                             } else {
+
+                                // 把 MessageDispatch 加入到 unconsumedMessages 集合中
                                 if (!consumeExpiredMessage(md)) {
                                     unconsumedMessages.enqueue(md);
                                     if (availableListener != null) {
@@ -1502,9 +1540,11 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
     // async (on next call) clear or track delivered as they may be flagged as duplicates if they arrive again
     private void clearDeliveredList() {
         if (clearDeliveredList) {
+            // 存储分发给消费者但还为应答的消息链表
             synchronized (deliveredMessages) {
                 if (clearDeliveredList) {
                     if (!deliveredMessages.isEmpty()) {
+                        // 如果 session 是事务的，则会遍历 deliveredMessage 中的消息放入到 previouslyDeliveredMessages 中来做重发
                         if (session.isTransacted()) {
 
                             if (previouslyDeliveredMessages == null) {
@@ -1516,6 +1556,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                             LOG.debug("{} tracking existing transacted {} delivered list ({}) on transport interrupt",
                                       getConsumerId(), previouslyDeliveredMessages.transactionId, deliveredMessages.size());
                         } else {
+                            // 如果 session 是非事务的，根据 ACK 的模式来选择不同的应答操作
                             if (session.isClientAcknowledge()) {
                                 LOG.debug("{} rolling back delivered list ({}) on transport interrupt", getConsumerId(), deliveredMessages.size());
                                 // allow redelivery
