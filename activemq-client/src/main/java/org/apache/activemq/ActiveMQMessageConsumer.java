@@ -937,9 +937,9 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
 
             // 如果是事务类型的会话
             if (session.getTransacted()) {
-                // 则判断 transactedIndividualAck，如果为 true
+                // 则判断 transactedIndividualAck 属性，是否单个确认
                 if (transactedIndividualAck) {
-                    // 单条消息直接返回 ack
+                    // 是的话则单条消息发送 INDIVIDUAL_ACK_TYPE ack
                     immediateIndividualTransactedAck(md);
                 } else {
                     // 否则，调用 ackLater，批量应答, client 端在消费消息后暂且不发送 ACK，而是把它缓存下来(pendingAck)
@@ -963,7 +963,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
         if (unconsumedMessages.isClosed()) {
             return;
         }
-        // 如果消息过期，则返回消息过期的 ack
+        // 如果消息过期，则返回 EXPIRED_ACK_TYPE 过期 ACK
         if (messageExpired) {
             acknowledge(md, MessageAck.EXPIRED_ACK_TYPE);
             stats.getExpiredMessageCount().increment();
@@ -978,13 +978,13 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                 if (deliveryingAcknowledgements.compareAndSet(false, true)) {
                     synchronized (deliveredMessages) {
                         if (!deliveredMessages.isEmpty()) {
-                            // 是优化 ack 操作，则走批量确认
+                            // 是否开启优化提交，开启了则走批量确认
                             if (optimizeAcknowledge) {
                                 ackCounter++;
 
                                 // AMQ-3956 evaluate both expired and normal msgs as
                                 // otherwise consumer may get stalled
-                                // 当批处理数量 > 065 * prefetchSize 或者超过了 optimizeAcknowledgeTimeOut 的超时时间，就发送确认命令
+                                // 当消息数量 >= 065 * prefetchSize 或者超过了 optimizeAcknowledgeTimeOut 的超时时间，就发送确认命令
                                 if (ackCounter + deliveredCounter >= (info.getPrefetchSize() * .65) || (optimizeAcknowledgeTimeOut > 0 && System.currentTimeMillis() >= (optimizeAckTimestamp + optimizeAcknowledgeTimeOut))) {
                                     MessageAck ack = makeAckForAllDeliveredMessages(MessageAck.STANDARD_ACK_TYPE);
                                     if (ack != null) {
@@ -1426,6 +1426,8 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
             clearDeliveredList();
             synchronized (unconsumedMessages.getMutex()) {
                 if (!unconsumedMessages.isClosed()) {
+
+                    // 判断是不是重复的消息
                     if (this.info.isBrowser() || !session.connection.isDuplicate(this, md.getMessage())) {
                         if (listener != null && unconsumedMessages.isRunning()) {
                             if (redeliveryExceeded(md)) {
@@ -1437,6 +1439,7 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                             try {
                                 boolean expired = isConsumerExpiryCheckEnabled() && message.isExpired();
                                 if (!expired) {
+                                    // 消费消息
                                     listener.onMessage(message);
                                 }
                                 afterMessageIsConsumed(md, expired);
@@ -1495,6 +1498,8 @@ public class ActiveMQMessageConsumer implements MessageAvailableConsumer, StatsC
                             session.getConnection().rollbackDuplicate(this, md.getMessage());
                             dispatch(md);
                         } else {
+
+                            // 响应一个 posionAck，表示这个消息处理有问题
                             LOG.warn("{} suppressing duplicate delivery on connection, poison acking: {}", getConsumerId(), md);
                             posionAck(md, "Suppressing duplicate delivery on connection, consumer " + getConsumerId());
                         }
