@@ -1,6 +1,5 @@
 package pers.mangseng.activemq.producer;
 
-import org.apache.activemq.ActiveMQConnection;
 import org.apache.activemq.ActiveMQConnectionFactory;
 
 import javax.jms.*;
@@ -23,13 +22,13 @@ public class QueueProducer {
         //启动 JMS connection
         connection.start();
         //通过 connection 创建 JMS session，第一个参数表示使用事务
-        Session session = connection.createSession(Boolean.TRUE, Session.AUTO_ACKNOWLEDGE);
+        Session session = connection.createSession(Boolean.TRUE, Session.DUPS_OK_ACKNOWLEDGE);
         //创建 JMS destination
         Destination destination = session.createQueue("my-queue");
         //创建 JMS producer，并设置 destination
         MessageProducer producer = session.createProducer(destination);
         producer.setDeliveryMode(DeliveryMode.PERSISTENT);
-        for (int i = 0; i < 2; i++) {
+        for (int i = 0; i < 1000; i++) {
             //创建 JMS consumer，或者是注册一个 JMS message listener
             TextMessage message = session.createTextMessage("hello,activemq" + i);
             // 添加消息属性
